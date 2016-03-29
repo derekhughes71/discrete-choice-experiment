@@ -1,0 +1,292 @@
+setwd("C:/Users/Dman/Desktop/Documents/Classes/Northwestern/PRED 450 - Marketing Analytics/assignments")
+
+require(dummies)
+load("stc-cbc-respondents-v3(1).RData")
+load("efCode.RData") 
+
+# sample of what function efcode.att.f() does
+xvec=c(0,1,2,3)
+efcode.att.f(xvec)
+# efcode.attmat.f() is wrapper code for efcode.att.f()
+# it is used to create dummy coded variables from a x matrix
+
+# testing efcode.attmat.f() function on data 
+taskV3 <- read.csv("stc-dc-task-cbc-v3(1).csv", sep="\t")
+task.mat <- as.matrix(taskV3[, c("screen", "RAM", "processor", "price", "brand")])
+X.mat=efcode.attmat.f(task.mat) 
+
+# code for intereaction variables of price vs brand levels
+# alternative coding using scale() does same thing: scale(taskV3$price,scale=FALSE)
+pricevec=taskV3$price-mean(taskV3$price)
+
+
+# gather columns which are for the dummy variables for brand levels
+X.brands=X.mat[,9:11] 
+
+# multiply dummy variable brands by categorical price vector
+X.BrandByPrice = X.brands*pricevec 
+
+# combine results into X matrix
+X.matrix=cbind(X.mat,X.BrandByPrice) 
+
+# check determinant of multiplied matrix
+det(t(X.matrix)%*%X.matrix)
+
+
+# get the results from survey of respondents into own data frame
+ydata=resp.data.v3[,4:39]
+names(ydata) 
+ydata=na.omit(ydata)
+
+# convert ydata into a matrix
+ydata=as.matrix(ydata)
+
+# assignment requries knowing if consumer purchased STC product in past
+zowner = 1 * ( ! is.na(resp.data.v3$vList3) )
+
+
+
+
+
+# creating the necessary data structure
+require(bayesm) 
+# our function rhierMnlDP() takes its data in the form of of a "list"
+
+# create list of lists for our respondents
+# respondents have a list of responses and list the x.matrix
+lgtdata = NULL # a starter placeholder for your list 
+for (i in 1:424) { 
+  lgtdata[[i]]=list(y=ydata[i,],X=X.matrix) 
+  } 
+length(lgtdata) 
+lgtdata[[3]] 
+
+str(lgtdata)
+
+
+
+
+
+
+# CHAPTER 2
+# using sample of lgtdata (100)
+lgtdata100=lgtdata[1:100]  # note the single [ ] here, not double
+
+# 5000 iterations with every 5th sample kept
+# create list of "kept" iterations
+mcmctest=list(R=50000,keep=10)
+
+
+# Create the "Data" list rhierMnlDP() expects:
+# data must be in list format
+Data1=list(p=3,lgtdata=lgtdata)  # p is choice set size
+
+# test run using Data1 and MCMC
+testrun1=rhierMnlDP(Data=Data1,Mcmc=mcmctest)
+
+names(testrun1)
+dim(testrun1$betadraw)
+betadraw1=testrun1$betadraw 
+
+
+# betadraw1
+dim(betadraw1) 
+
+?plot()
+plot(betadraw1[12,10,])
+plot(density(betadraw1[2,1,3000:5000],width=2))
+
+summary(betadraw1[1,1,3000:5000])
+
+# to get respondent means for 165 coefficients. 
+# used for 14 coefficients for 14 variables
+apply(betadraw1[,,3000:5000],c(2),mean) 
+
+# builds 424 x 14 matrix
+# apply(betadraw1[,,3000:5000],c(1,2),mean) 
+
+# diff betn respondnt 1's 1st and 2nd coefficients
+# summary((betadraw1[1,1,3000:5000]-betadraw1[1,2,3000:5000]))
+# plot(density(betadraw1[1,1,3000:5000]-betadraw1[1,2,3000:5000],width=2))
+
+betameansoverall <- apply(betadraw1[,,3000:5000],c(2),mean)
+betameansoverall
+
+perc <- apply(betadraw1[,,3000:5000],2,quantile,probs=c(0.05,0.10,0.25,0.5 ,0.75,0.90,0.95))
+perc
+
+
+
+
+
+
+# CHAPTER 3 - Evaluation of prior ownership ##########
+
+# loglike is log-likelihood of model at each iteration
+
+table(testrun1$Istardraw)
+
+# include zowner into data set as covariate and so MCMC fucntion likes its form
+zownertest=matrix(scale(zowner[1:424],scale=FALSE),ncol=1)
+
+Data2=list(p=3,lgtdata=lgtdata,Z=zownertest) 
+
+# run MCMC again on data 2
+testrun2=rhierMnlDP(Data=Data2,Mcmc=mcmctest) 
+names(testrun2)
+
+# Deltadraw is a matrix with number of rows=saved iterations (1000), and number of columns = number of regression predictors in your X.matrix (14):
+dim(testrun2$Deltadraw) 
+
+# means from the posterior distributions of the regression coefficients of the 14 betas on (mean-centered) zownertest
+apply(testrun2$Deltadraw[3000:5000,],2,mean)
+
+# selected last 2000 draws of 10000 and show quantile %'s
+apply(testrun2$Deltadraw[3000:5000,],2,quantile,probs=c(0.10,0.25,0.5 ,0.75,0.90))
+
+betadraw2=testrun2$betadraw
+
+betameans <- apply(betadraw2[,,3000:5000],c(1,2),mean)
+str(betameans)
+dim(X.matrix)
+xbeta=X.matrix%*%t(betameans)
+dim(xbeta)
+xbeta2=matrix(xbeta,ncol=3,byrow=TRUE)
+dim(xbeta2)
+
+# create probability choice matrix
+expxbeta2=exp(xbeta2)
+rsumvec=rowSums(expxbeta2)
+
+pchoicemat=expxbeta2/rsumvec
+head(pchoicemat)
+dim(pchoicemat)
+
+custchoice <- max.col(pchoicemat)
+str(custchoice)
+
+ydatavec <- as.vector(t(ydata))
+str(ydatavec)
+
+#  EVALUATE MODEL ACCURACY and FIT - ownership model
+
+table(custchoice,ydatavec)
+
+require("pROC")
+roctest <- roc(ydatavec, custchoice, plot=TRUE)
+auc(roctest)
+
+
+##### CHAPTER 4 ########3
+
+# get beta means for all models (2000) of this respondent (1)
+betameans <- apply(betadraw1[,,3000:5000],c(1,2),mean)
+str(betameans)
+dim(X.matrix)
+xbeta=X.matrix%*%t(betameans)
+dim(xbeta)
+xbeta2=matrix(xbeta,ncol=3,byrow=TRUE)
+dim(xbeta2)
+
+# create probability choice matrix
+expxbeta2=exp(xbeta2)
+rsumvec=rowSums(expxbeta2)
+
+# predicted value: divide row value by row total for percentage prob
+# each column represents one of three choices for each choice set
+# the first 36 rows are choices for each choice set (36) by respondent #1
+# the next 36 are the choices for respondent #2, etc until all 424 respondent choices are shown
+pchoicemat=expxbeta2/rsumvec
+head(pchoicemat)
+dim(pchoicemat)
+
+# select max value out of the three choice set values
+# reported by each customer
+# these are the PREDICTED choices for each respondent
+# for each choice set
+custchoice <- max.col(pchoicemat)
+str(custchoice)
+
+# change ydata matrix to vector
+# these are the ACTUAL choices by 
+ydatavec <- as.vector(t(ydata))
+str(ydatavec)
+
+
+
+
+#  EVALUATE MODEL ACCURACY and FIT
+
+# confusion matrix...customer predict choice vs actual choice
+# evals actual vs predicted choice
+# add all diagonal values then divide by total values for accuracy number
+table(custchoice,ydatavec)
+
+# ROC AND AUC values for validation of model (80% better is good)
+require("pROC")
+roctest <- roc(ydatavec, custchoice, plot=TRUE)
+auc(roctest)
+
+# log likelihood test (want low number/ accounts for parsimony(?))
+# only can compare to equivalent comparative models
+# so mainly use AUC and confusion matrix
+logliketest <- testrun1$loglike
+mean(logliketest)
+
+
+
+
+
+#### CHAPTER 5 #####
+ex_scen <- read.csv("extra-scenarios-v1.csv")
+Xextra.matrix <- as.matrix(ex_scen[,c("V1","V2","V3","V4","V5","V6","V7","V8","V9",
+                                      "V10","V11","V12","V13","V14")])
+
+# using overall model to predict instead of an individual model
+betavec=matrix(betameansoverall,ncol=1,byrow=TRUE)
+betavec
+
+exp(betavec)
+
+xextrabeta=Xextra.matrix%*%(betavec)
+xbetaextra2=matrix(xextrabeta,ncol=3,byrow=TRUE)
+dim(xbetaextra2)
+
+expxbetaextra2=exp(xbetaextra2)
+rsumvec=rowSums(expxbetaextra2)
+pchoicemat=expxbetaextra2/rsumvec
+pchoicemat
+
+
+
+# partworth plot()
+
+plot(betameansoverall, xlab="Attributes", main="partworth values",type="s")
+points(betameansoverall,cex = .5, col = "dark red", pch=14)
+
+
+
+
+#   predicting final choice sets 
+# using overall model to predict instead of an individual model
+betavec2=matrix(betameansoverall,ncol=1,byrow=TRUE)
+betavec2
+
+exp(betavec2)
+
+xextrabeta=X.matrix%*%(betavec2)
+xbetaextra2=matrix(xextrabeta,ncol=3,byrow=TRUE)
+dim(xbetaextra2)
+
+expxbetaextra2=exp(xbetaextra2)
+rsumvec=rowSums(expxbetaextra2)
+pchoicemat=expxbetaextra2/rsumvec
+pchoicemat
+
+custchoice <- max.col(pchoicemat)
+str(custchoice)
+
+# change ydata matrix to vector
+# these are the ACTUAL choices by 
+ydatavec <- as.vector(t(ydata))
+str(ydatavec)
